@@ -10,46 +10,56 @@
 #include "img_aux.hpp"
 #define IMAGESIZE 256   /* = GRAYLEVEL */
 
-std::array<std::atomic_long, GRAYLEVEL> histogram; /* Array of atomic long int variables */
-long int max_frequency; /* Maximum frequency */
-std::atomic_int barrier1, barrier2;
+std::array<std::atomic<long>, GRAYLEVEL> histogram; /* Array of atomic long int variables */
+std::atomic<long> max_frequency; /* Maximum frequency */
+std::atomic<int> barrier1, barrier2;
 
 void make_histogram_image(int offset, int workers)
 /* Histogram of image1 is output into image2 */
 {
   int i, j, x, y, workload; /* control variable */
   int height; /* height of histogram */
-  
+  long char_count, prev_max_frequency;
+
   workload = y_size1 / workers;
   for (y = workload * offset; y < (offset+1)*workload ; y++) {
     for (x = 0; x < x_size1; x++) {
       /* Now here, instead of using mutexes, we can substitute in atomic instructions */
-      atomic_fetch_add(histogram[image1[y][x]], 1); /* Atomic increment */
+      std::atomic_fetch_add(&histogram[image1[y][x]], (long)1); /* Atomic increment */
     }
   }
 
   /* We must synchronize here so that all frequency counting is completed before we
      determine the maximum frequency */
-  atomic_fetch_add(barrier1, 1);
+  std::atomic_fetch_add(&barrier1, 1);
 
   /* Spin lock until all workers reach this barrier */
-  while (barrier1 != workers)
+  while (std::atomic_load(&barrier1) < workers) {
     ;
+  }
 
   /* calculation of maximum frequency */
   workload = GRAYLEVEL / workers;
   for (i = workload * offset; i < (offset+1) * workload; i++) { 
-    if(histogram[i] > max_frequency)
-      max_frequency = histogram[i]; /* Atomic assignment */
+    /* Note: histogram is no longer changing, so we do not need an atomic load */
+    char_count = histogram[i];
+    prev_max_frequency = std::atomic_load(&max_frequency);
+    while (char_count > prev_max_frequency) {
+      /* max_frequency will always have the maximum value. Therefore, if it changes
+       while we are updating it, we must check again if we should
+       update it once more. */
+      std::atomic_compare_exchange_strong(&max_frequency, &prev_max_frequency, char_count);
+    }
   }
 
   /* We need a barrier here so that processing is completely finished before
      we generate the 2nd image */
-  atomic_fetch_add(barrier2, 1);
+  std::atomic_fetch_add(&barrier2, 1);
 
   /* Spin lock until all workers reach this barrier */
-  while (barrier2 != workers)
+  while (std::atomic_load(&barrier2) < workers) {
     ;
+  }
 
   /* Histogram image generation */
   x_size2 = IMAGESIZE;
@@ -57,8 +67,9 @@ void make_histogram_image(int offset, int workers)
 
   workload = GRAYLEVEL / workers;
   for (i = workload * offset; i < (offset+1) * workload; i++) {
+    /* max_frequency and histogram are now only being read, so we do not need atomic loads */
     height = (int)(MAX_BRIGHTNESS / 
-       (double)atomic_load(max_frequency) * (double)atomic_load(histogram[i]));
+       (double)max_frequency * (double)histogram[i]);
     for (j = 0; j < height; j++) {
       image2[IMAGESIZE-1-j][i] = height;/* MAX_BRIGHTNESS; */
     }
@@ -85,6 +96,7 @@ int main(int argc, char* argv[])
 
   for(i = 0; i < iter; i++)
   {
+      barrier1 = barrier2 = 0;  /* Init barriers on every iteration */
       gettimeofday(&start, NULL);
       /* Calculation of histogram */
       for (j = 0; j < GRAYLEVEL; j++) {

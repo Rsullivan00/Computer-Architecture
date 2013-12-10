@@ -1,0 +1,5 @@
+$small = "img/small.pgm"
+$medium = "img/medium.pgm"
+$large = "img/large.pgm"
+
+$ATOM = 
