@@ -12,6 +12,7 @@
 
 std::array<std::atomic_long, GRAYLEVEL> histogram; /* Array of atomic long int variables */
 long int max_frequency; /* Maximum frequency */
+std::atomic_int barrier1, barrier2;
 
 void make_histogram_image(int offset, int workers)
 /* Histogram of image1 is output into image2 */
@@ -23,16 +24,32 @@ void make_histogram_image(int offset, int workers)
   for (y = workload * offset; y < (offset+1)*workload ; y++) {
     for (x = 0; x < x_size1; x++) {
       /* Now here, instead of using mutexes, we can substitute in atomic instructions */
-      histogram[image1[y][x]]++; /* Atomic incrememnt */
+      atomic_fetch_add(histogram[image1[y][x]], 1); /* Atomic increment */
     }
   }
 
+  /* We must synchronize here so that all frequency counting is completed before we
+     determine the maximum frequency */
+  atomic_fetch_add(barrier1, 1);
+
+  /* Spin lock until all workers reach this barrier */
+  while (barrier1 != workers)
+    ;
+
   /* calculation of maximum frequency */
   workload = GRAYLEVEL / workers;
-  for (i = workload * offset; i < (offset+1) * workload; i++) {
+  for (i = workload * offset; i < (offset+1) * workload; i++) { 
     if(histogram[i] > max_frequency)
       max_frequency = histogram[i]; /* Atomic assignment */
   }
+
+  /* We need a barrier here so that processing is completely finished before
+     we generate the 2nd image */
+  atomic_fetch_add(barrier2, 1);
+
+  /* Spin lock until all workers reach this barrier */
+  while (barrier2 != workers)
+    ;
 
   /* Histogram image generation */
   x_size2 = IMAGESIZE;
@@ -41,7 +58,7 @@ void make_histogram_image(int offset, int workers)
   workload = GRAYLEVEL / workers;
   for (i = workload * offset; i < (offset+1) * workload; i++) {
     height = (int)(MAX_BRIGHTNESS / 
-       (double)max_frequency * (double)histogram[i]);
+       (double)atomic_load(max_frequency) * (double)atomic_load(histogram[i]));
     for (j = 0; j < height; j++) {
       image2[IMAGESIZE-1-j][i] = height;/* MAX_BRIGHTNESS; */
     }

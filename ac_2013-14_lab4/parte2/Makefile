@@ -2,7 +2,7 @@ CC = g++
 CFLAGS= -Wall -g -std=c++0x
 PRGS = histogram_atom histogram_mutex
 AUX = img_aux.cpp
-LIBS = -lm -lrt -pthread
+LIBS = -lm -pthread
 OBJS = $(PRGS)
 
 all: $(OBJS)
