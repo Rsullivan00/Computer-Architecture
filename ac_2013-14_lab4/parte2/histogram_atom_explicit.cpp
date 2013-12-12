@@ -28,16 +28,16 @@ void make_histogram_image(int offset, int workers)
   for (y = workload * offset; y < (offset+1)*workload ; y++) {
     for (x = 0; x < x_size1; x++) {
       /* Now here, instead of using mutexes, we can substitute in atomic instructions */
-      std::atomic_fetch_add(&histogram[image1[y][x]], (long)1); /* Atomic increment */
+      std::atomic_fetch_add_explicit(&histogram[image1[y][x]], (long)1, std::memory_order_seq_cst); /* Atomic increment */
     }
   }
 
   /* We must synchronize here so that all frequency counting is completed before we
      determine the maximum frequency */
-  std::atomic_fetch_add(&barrier1, 1);
+  std::atomic_fetch_add_explicit(&barrier1, 1, std::memory_order_seq_cst);
 
   /* Spin lock until all workers reach this barrier */
-  while (std::atomic_load(&barrier1) < workers) {
+  while (std::atomic_load_explicit(&barrier1, std::memory_order_seq_cst) < workers) {
     ;
   }
 
@@ -46,21 +46,21 @@ void make_histogram_image(int offset, int workers)
   for (i = workload * offset; i < (offset+1) * workload; i++) { 
     /* Note: histogram is no longer changing, so we do not need an atomic load */
     char_count = histogram[i];
-    prev_max_frequency = std::atomic_load(&max_frequency);
+    prev_max_frequency = std::atomic_load_explicit(&max_frequency, std::memory_order_seq_cst);
     while (char_count > prev_max_frequency) {
       /* max_frequency will always have the maximum value. Therefore, if it changes
        while we are updating it, we must check again if we should
        update it once more. */
-      std::atomic_compare_exchange_strong(&max_frequency, &prev_max_frequency, char_count);
+      std::atomic_compare_exchange_strong_explicit(&max_frequency, &prev_max_frequency, char_count, std::memory_order_seq_cst, std::memory_order_seq_cst);
     }
   }
 
   /* We need a barrier here so that processing is completely finished before
      we generate the 2nd image */
-  std::atomic_fetch_add(&barrier2, 1);
+  std::atomic_fetch_add_explicit(&barrier2, 1, std::memory_order_seq_cst);
 
   /* Spin lock until all workers reach this barrier */
-  while (std::atomic_load(&barrier2) < workers) {
+  while (std::atomic_load_explicit(&barrier2, std::memory_order_seq_cst) < workers) {
     ;
   }
 

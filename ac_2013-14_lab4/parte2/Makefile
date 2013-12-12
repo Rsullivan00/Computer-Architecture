@@ -1,6 +1,6 @@
 CC = g++
 CFLAGS= -Wall -g -std=c++0x
-PRGS = histogram_atom histogram_mutex
+PRGS = histogram_atom histogram_mutex histogram_atom_explicit
 AUX = img_aux.cpp
 LIBS = -lm -pthread
 OBJS = $(PRGS)
