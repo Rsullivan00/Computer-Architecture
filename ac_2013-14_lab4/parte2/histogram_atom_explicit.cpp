@@ -27,8 +27,9 @@ void make_histogram_image(int offset, int workers)
   workload = y_size1 / workers;
   for (y = workload * offset; y < (offset+1)*workload ; y++) {
     for (x = 0; x < x_size1; x++) {
-      /* Now here, instead of using mutexes, we can substitute in atomic instructions */
-      std::atomic_fetch_add_explicit(&histogram[image1[y][x]], (long)1, std::memory_order_seq_cst); /* Atomic increment */
+      /* Now here, instead of using mutexes, we can substitute an atomic instruction to increment the histogram array. */
+      /* Since we are only incrementing the histogram array (and synchronizing below), we can relax ordering. */
+      std::atomic_fetch_add_explicit(&histogram[image1[y][x]], (long)1, std::memory_order_relaxed); /* Atomic increment */
     }
   }
 
@@ -38,7 +39,7 @@ void make_histogram_image(int offset, int workers)
 
   /* Spin lock until all workers reach this barrier */
   while (std::atomic_load_explicit(&barrier1, std::memory_order_seq_cst) < workers) {
-    ;
+    ;   /* Do nothing */
   }
 
   /* calculation of maximum frequency */
