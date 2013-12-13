@@ -29,53 +29,27 @@ void make_histogram_image(int offset, int workers)
     for (x = 0; x < x_size1; x++) {
       /* Now here, instead of using mutexes, we can substitute an atomic instruction to increment the histogram array. */
       /* Since we are only incrementing the histogram array (and synchronizing below), we can relax ordering. */
-      std::atomic_fetch_add_explicit(&histogram[image1[y][x]], (long)1, std::memory_order_relaxed); /* Atomic increment */
-    }
-  }
+      char_count = std::atomic_fetch_add_explicit(&histogram[image1[y][x]], (long)1, std::memory_order_seq_cst) + 1; /* Atomic increment */
+      prev_max_frequency = std::atomic_load_explicit(&max_frequency, std::memory_order_seq_cst);
+      while (char_count > prev_max_frequency) {
+        /* max_frequency will always have the maximum value. Therefore, if it changes
+         while we are updating it, we must check again if we should
+         update it once more. */
+        if (std::atomic_compare_exchange_strong_explicit(&max_frequency, 
+            &prev_max_frequency, char_count, std::memory_order_seq_cst, std::memory_order_seq_cst)) {
+          /* If we updated the max_frequency, we will now need to recalculate the image2 outputs 
+              for every pixel. */
+          for (i = 0; i < IMAGESIZE; i++) {
+            height = (int)(MAX_BRIGHTNESS / (double)char_count * (double)std::atomic_load_explicit(&histogram[i], std::memory_order_seq_cst));
+            for (j = 0; j < IMAGESIZE; j++) {
+              image2[IMAGESIZE-1-j][i] = height;
+            }
+          }
+        }
+      }
 
-  /* We must synchronize here so that all frequency counting is completed before we
-     determine the maximum frequency */
-  std::atomic_fetch_add_explicit(&barrier1, 1, std::memory_order_seq_cst);
-
-  /* Spin lock until all workers reach this barrier */
-  while (std::atomic_load_explicit(&barrier1, std::memory_order_seq_cst) < workers) {
-    ;   /* Do nothing */
-  }
-
-  /* calculation of maximum frequency */
-  workload = GRAYLEVEL / workers;
-  for (i = workload * offset; i < (offset+1) * workload; i++) { 
-    /* Note: histogram is no longer changing, so we do not need an atomic load */
-    char_count = histogram[i];
-    prev_max_frequency = std::atomic_load_explicit(&max_frequency, std::memory_order_seq_cst);
-    while (char_count > prev_max_frequency) {
-      /* max_frequency will always have the maximum value. Therefore, if it changes
-       while we are updating it, we must check again if we should
-       update it once more. */
-      std::atomic_compare_exchange_strong_explicit(&max_frequency, &prev_max_frequency, char_count, std::memory_order_seq_cst, std::memory_order_seq_cst);
-    }
-  }
-
-  /* We need a barrier here so that processing is completely finished before
-     we generate the 2nd image */
-  std::atomic_fetch_add_explicit(&barrier2, 1, std::memory_order_seq_cst);
-
-  /* Spin lock until all workers reach this barrier */
-  while (std::atomic_load_explicit(&barrier2, std::memory_order_seq_cst) < workers) {
-    ;
-  }
-
-  /* Histogram image generation */
-  x_size2 = IMAGESIZE;
-  y_size2 = IMAGESIZE;
-
-  workload = GRAYLEVEL / workers;
-  for (i = workload * offset; i < (offset+1) * workload; i++) {
-    /* max_frequency and histogram are now only being read, so we do not need atomic loads */
-    height = (int)(MAX_BRIGHTNESS / 
-       (double)max_frequency * (double)histogram[i]);
-    for (j = 0; j < height; j++) {
-      image2[IMAGESIZE-1-j][i] = height;/* MAX_BRIGHTNESS; */
+      /* Whenever we add to a count in the histogram array, we must update the corresponding image2 output */
+      image2[x][y] = (int)(MAX_BRIGHTNESS / (double)std::atomic_load_explicit(&max_frequency, std::memory_order_seq_cst) * (double)char_count);
     }
   }
 }
@@ -97,6 +71,11 @@ int main(int argc, char* argv[])
   std::vector<std::thread> threads;
 
   load_image_file(argv[1]);       	/* Input of image1 */
+
+
+  /* Histogram image generation */
+  x_size2 = IMAGESIZE;
+  y_size2 = IMAGESIZE;
 
   for(i = 0; i < iter; i++)
   {
@@ -127,6 +106,7 @@ int main(int argc, char* argv[])
       threads.clear();
   }
 
+  std::cout << "Done" << std::endl;
   save_image_file(argv[2]);       	/* Output of image2 */
 
   std::cout << "histogram takes: " << (double)usec / 1000000 << "sec    mean: " << (double)usec / 1000000 / iter <<"sec    image size: " << y_size1*x_size1 << std::endl;
